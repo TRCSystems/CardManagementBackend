@@ -8,6 +8,10 @@ import com.cardsystem.models.Student;
 import com.cardsystem.models.Wallet;
 import com.cardsystem.repository.SchoolRepository;
 import com.cardsystem.repository.StudentRepository;
+import com.cardsystem.repository.CardAssignmentRepository;
+import com.cardsystem.models.Card;
+import com.cardsystem.models.CardAssignment;
+
 //import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -33,6 +37,7 @@ public class StudentService {
 
     private final StudentRepository studentRepository;
     private final SchoolRepository schoolRepository;
+    private final CardAssignmentRepository assignmentRepository;
 
     @Transactional
     public Student createStudent(String schoolId, StudentCreateRequest request) {
@@ -62,6 +67,34 @@ public class StudentService {
     public Student getStudentById(Long id) {
         return studentRepository.findById(id)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Student not found"));
+    }
+    @Transactional(readOnly = true)
+    public List<com.cardsystem.dto.StudentResponse> listStudentsBySchoolWithCards(String schoolId) {
+        School school = schoolRepository.findById(schoolId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "School not found"));
+        List<Student> students = studentRepository.findBySchool_Code(schoolId);
+        List<com.cardsystem.dto.StudentResponse> out = new ArrayList<>();
+
+        for (Student student : students) {
+            com.cardsystem.dto.StudentResponse.StudentResponseBuilder b = com.cardsystem.dto.StudentResponse.builder()
+                    .id(student.getId())
+                    .studentNumber(student.getStudentNumber())
+                    .name(student.getName())
+                    .classGrade(student.getClassGrade())
+                    .schoolCode(student.getSchool().getCode())
+                    .createdAt(student.getCreatedAt());
+
+            assignmentRepository.findByStudentAndUnassignedAtIsNull(student)
+                    .ifPresent(assign -> {
+                        Card card = assign.getCard();
+                        b.cardId(card.getId());
+                        b.cardUid(card.getUid());
+                    });
+
+            out.add(b.build());
+        }
+
+        return out;
     }
 
     @Transactional

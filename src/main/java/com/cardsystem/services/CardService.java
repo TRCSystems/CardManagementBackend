@@ -18,6 +18,9 @@ import org.springframework.http.HttpStatus;
 
 import java.time.LocalDateTime;
 import java.util.Optional;
+import java.util.List;
+import java.util.ArrayList;
+import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -129,5 +132,31 @@ public class CardService {
                 .map(CardAssignment::getStudent)
                 .map(Student::getId)
                 .orElse(null);
+    }
+
+    /**
+     * List all cards belonging to a school, with current assignment info.
+     */
+    public List<com.cardsystem.dto.CardActionResponse> listCardsBySchoolWithAssignment(String schoolCode) {
+        List<Card> cards = cardRepository.findBySchool_Code(schoolCode);
+        List<com.cardsystem.dto.CardActionResponse> out = new ArrayList<>();
+
+        for (Card card : cards) {
+            Long studentId = assignmentRepository.findByCardAndUnassignedAtIsNull(card)
+                    .map(CardAssignment::getStudent)
+                    .map(Student::getId)
+                    .orElse(null);
+
+            com.cardsystem.dto.CardActionResponse item = com.cardsystem.dto.CardActionResponse.builder()
+                    .cardId(card.getId())
+                    .uid(card.getUid())
+                    .status(card.getStatus())
+                    .studentId(studentId)
+                    .build();
+
+            out.add(item);
+        }
+
+        return out;
     }
 }

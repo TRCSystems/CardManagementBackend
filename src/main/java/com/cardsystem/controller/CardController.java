@@ -116,4 +116,17 @@ public class CardController {
 //        // For now placeholder – implement in next step if needed
 //        throw new ResponseStatusException(HttpStatus.NOT_IMPLEMENTED, "Resolve endpoint not yet implemented");
 //    }
+
+    // ────────────────────────────────────────────────
+    // 5. Get all cards for a school (assigned + unassigned)
+    // ────────────────────────────────────────────────
+    @GetMapping
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY')")
+    public ResponseEntity<java.util.List<com.cardsystem.dto.CardActionResponse>> getCardsBySchool(@RequestParam("schoolId") String schoolId) {
+
+        java.util.List<com.cardsystem.dto.CardActionResponse> list = cardService.listCardsBySchoolWithAssignment(schoolId);
+
+        return ResponseEntity.ok(list);
+    }
+
 }

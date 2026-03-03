@@ -14,5 +14,8 @@ public class StudentResponse {
     private String classGrade;
     private String schoolCode;
     private LocalDateTime createdAt;
+    // card assignment info (null if unassigned)
+    private Long cardId;
+    private String cardUid;
     // optional: private BigDecimal walletBalance;  // if you later add read access
 }

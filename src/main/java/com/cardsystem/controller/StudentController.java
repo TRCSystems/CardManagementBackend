@@ -69,7 +69,17 @@ public class StudentController {
     }
 
     // ────────────────────────────────────────────────
-    // 4. Update student (partial)
+    // 4. List all students for a school (include card assignment info)
+    // ────────────────────────────────────────────────
+    @GetMapping
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY')")
+    public ResponseEntity<java.util.List<StudentResponse>> listStudents(@RequestParam("schoolId") String schoolId) {
+        java.util.List<StudentResponse> list = studentService.listStudentsBySchoolWithCards(schoolId);
+        return ResponseEntity.ok(list);
+    }
+
+    // ────────────────────────────────────────────────
+    // 5. Update student (partial)
     // ────────────────────────────────────────────────
     @PutMapping("/{id}")
     @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN')")
@@ -83,13 +93,15 @@ public class StudentController {
 
     // Helper: convert entity → DTO
     private StudentResponse toStudentResponse(Student student) {
-        return StudentResponse.builder()
+        StudentResponse.StudentResponseBuilder b = StudentResponse.builder()
                 .id(student.getId())
                 .studentNumber(student.getStudentNumber())
                 .name(student.getName())
                 .classGrade(student.getClassGrade())
                 .schoolCode(student.getSchool().getCode())
-                .createdAt(student.getCreatedAt())
-                .build();
+                .createdAt(student.getCreatedAt());
+
+        // card info may be added later if loaded by service; default null
+        return b.build();
     }
 }

@@ -7,6 +7,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 
 import java.util.Optional;
+import java.util.List;
 
 @Repository
 public interface StudentRepository extends JpaRepository<Student, Long> {
@@ -15,6 +16,7 @@ public interface StudentRepository extends JpaRepository<Student, Long> {
 
     Optional<Object> findByStudentNumber(String reference);
 
+    List<Student> findBySchool_Code(String schoolCode);
     // Optional: find by student number within school
     // Optional<Student> findBySchoolAndStudentNumber(School school, String studentNumber);
 }
