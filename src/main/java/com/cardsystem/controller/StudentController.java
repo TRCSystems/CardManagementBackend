@@ -49,8 +49,8 @@ public class StudentController {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "No file uploaded");
         }
 
-        if (!file.getOriginalFilename().toLowerCase().endsWith(".csv")) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only CSV files are allowed");
+        if (!file.getOriginalFilename().toLowerCase().endsWith(".xlsx")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Only .xlsx files are allowed");
         }
 
         BulkUploadResponse response = studentService.bulkCreateFromCsv(file, schoolId);

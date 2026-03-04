@@ -15,18 +15,15 @@ import com.cardsystem.models.CardAssignment;
 //import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.csv.CSVFormat;
-import org.apache.commons.csv.CSVParser;
-import org.apache.commons.csv.CSVRecord;
+import org.apache.poi.ss.usermodel.*;
+import org.apache.poi.xssf.usermodel.XSSFWorkbook;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.annotation.Transactional;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStreamReader;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -121,19 +118,54 @@ public class StudentService {
         int successCount = 0;
         int rowNum = 0;
 
-        try (BufferedReader br = new BufferedReader(new InputStreamReader(file.getInputStream()));
-             CSVParser parser = new CSVParser(br, CSVFormat.DEFAULT
-                     .withFirstRecordAsHeader()
-                     .withIgnoreHeaderCase()
-                     .withTrim())) {
+        try (Workbook workbook = new XSSFWorkbook(file.getInputStream())) {
+            Sheet sheet = workbook.getSheetAt(0);
 
-            for (CSVRecord record : parser) {
+            // Find header row and column indices
+            Row headerRow = sheet.getRow(0);
+            if (headerRow == null) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Excel file is empty or has no header row");
+            }
+
+            int studentNumberColIndex = -1;
+            int nameColIndex = -1;
+            int classGradeColIndex = -1;
+
+            for (int i = 0; i < headerRow.getLastCellNum(); i++) {
+                Cell cell = headerRow.getCell(i);
+                if (cell != null) {
+                    String header = cell.getStringCellValue().toLowerCase().trim();
+                    if ("studentnumber".equals(header)) {
+                        studentNumberColIndex = i;
+                    } else if ("name".equals(header)) {
+                        nameColIndex = i;
+                    } else if ("classgrade".equals(header)) {
+                        classGradeColIndex = i;
+                    }
+                }
+            }
+
+            if (studentNumberColIndex == -1 || nameColIndex == -1) {
+                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Excel file must contain 'studentNumber' and 'name' columns");
+            }
+
+            // Process data rows
+            for (int rowIndex = 1; rowIndex <= sheet.getLastRowNum(); rowIndex++) {
+                Row row = sheet.getRow(rowIndex);
+                if (row == null) {
+                    continue;
+                }
+
                 rowNum++;
 
                 try {
-                    String studentNumber = record.get("studentNumber").trim();
-                    String name = record.get("name").trim();
-                    String classGrade = record.isSet("classGrade") ? record.get("classGrade").trim() : null;
+                    String studentNumber = getCellValue(row.getCell(studentNumberColIndex)).trim();
+                    String name = getCellValue(row.getCell(nameColIndex)).trim();
+                    String classGrade = classGradeColIndex >= 0 ? getCellValue(row.getCell(classGradeColIndex)).trim() : null;
+
+                    if (classGrade != null && classGrade.isBlank()) {
+                        classGrade = null;
+                    }
 
                     if (studentNumber.isBlank() || name.isBlank()) {
                         failures.add(failure(rowNum, studentNumber, "Missing studentNumber or name"));
@@ -159,12 +191,18 @@ public class StudentService {
                     successCount++;
 
                 } catch (Exception e) {
-                    failures.add(failure(rowNum, record.get("studentNumber"), e.getMessage()));
+                    String studentNum = "";
+                    try {
+                        studentNum = getCellValue(row.getCell(studentNumberColIndex));
+                    } catch (Exception ignored) {}
+                    failures.add(failure(rowNum, studentNum, e.getMessage()));
                 }
             }
 
+        } catch (ResponseStatusException rse) {
+            throw rse;
         } catch (IOException e) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Failed to read CSV: " + e.getMessage());
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Failed to read Excel file: " + e.getMessage());
         }
 
         return BulkUploadResponse.builder()
@@ -173,6 +211,22 @@ public class StudentService {
                 .failedCount(failures.size())
                 .failures(failures)
                 .build();
+    }
+
+    private String getCellValue(Cell cell) {
+        if (cell == null) {
+            return "";
+        }
+        switch (cell.getCellType()) {
+            case STRING:
+                return cell.getStringCellValue();
+            case NUMERIC:
+                return String.valueOf((int) cell.getNumericCellValue());
+            case BOOLEAN:
+                return String.valueOf(cell.getBooleanCellValue());
+            default:
+                return "";
+        }
     }
 
     private BulkUploadResponse.FailedRowDetail failure(int row, String num, String msg) {
