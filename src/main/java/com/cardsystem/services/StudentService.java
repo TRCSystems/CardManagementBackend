@@ -1,6 +1,7 @@
 package com.cardsystem.services;
 
 import com.cardsystem.dto.BulkUploadResponse;
+import com.cardsystem.dto.FeeStatusResponse;
 import com.cardsystem.dto.StudentCreateRequest;
 import com.cardsystem.dto.StudentUpdateRequest;
 import com.cardsystem.models.School;
@@ -11,6 +12,7 @@ import com.cardsystem.repository.StudentRepository;
 import com.cardsystem.repository.CardAssignmentRepository;
 import com.cardsystem.models.Card;
 import com.cardsystem.models.CardAssignment;
+import com.cardsystem.services.WalletService;
 
 //import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -24,6 +26,8 @@ import org.springframework.web.server.ResponseStatusException;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
+import java.math.BigDecimal;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -35,6 +39,7 @@ public class StudentService {
     private final StudentRepository studentRepository;
     private final SchoolRepository schoolRepository;
     private final CardAssignmentRepository assignmentRepository;
+    private final WalletService walletService;
 
     @Transactional
     public Student createStudent(String schoolId, StudentCreateRequest request) {
@@ -58,6 +63,28 @@ public class StudentService {
         student.setWallet(wallet);
 
         return studentRepository.save(student);
+    }
+
+    @Transactional(readOnly = true)
+    public FeeStatusResponse getFeeStatus(Long studentId) {
+        Student student = getStudentById(studentId);
+        Wallet wallet = student.getWallet();
+        if (wallet == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found for student");
+        }
+
+        BigDecimal walletBalance = walletService.getBalance(wallet.getId());
+
+        return FeeStatusResponse.builder()
+                .studentId(student.getId())
+                .studentNumber(student.getStudentNumber())
+                .studentName(student.getName())
+                .schoolCode(student.getSchool().getCode())
+                .walletBalance(walletBalance)
+                .feeBalance(BigDecimal.ZERO) // placeholder until fee module exists
+                .walletStatus(wallet.getStatus())
+                .asOf(LocalDateTime.now())
+                .build();
     }
 
     @Transactional(readOnly = true)

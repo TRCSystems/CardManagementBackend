@@ -78,6 +78,13 @@ public class StudentController {
         return ResponseEntity.ok(list);
     }
 
+    // Fee status per student
+    @GetMapping("/{id}/fee-status")
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY')")
+    public ResponseEntity<com.cardsystem.dto.FeeStatusResponse> getFeeStatus(@PathVariable Long id) {
+        return ResponseEntity.ok(studentService.getFeeStatus(id));
+    }
+
     // ────────────────────────────────────────────────
     // 5. Update student (partial)
     // ────────────────────────────────────────────────

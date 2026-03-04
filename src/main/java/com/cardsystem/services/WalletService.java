@@ -22,7 +22,9 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.math.BigDecimal;
 import java.util.Base64;
+import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -229,15 +231,35 @@ public class WalletService {
         walletRepository.save(wallet);
     }
 
-//    // Freeze/unfreeze
-//    @Transactional
-//    public void setFreeze(Long walletId, boolean freeze) {
-//        Wallet wallet = walletRepository.findById(walletId)
-//                .orElseThrow();
-//
-//        wallet.setStatus(freeze ? WalletStatus.FROZEN : WalletStatus.ACTIVE);
-//        walletRepository.save(wallet);
-//    }
+    // Manual adjust that returns updated wallet (used by controller)
+    @Transactional
+    public Wallet manualAdjustAndReturn(Long walletId, BigDecimal amount, String reason) {
+        manualAdjust(walletId, amount, reason);
+        return walletRepository.findById(walletId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
+    }
+
+    // Freeze/unfreeze
+    @Transactional
+    public Wallet setFreeze(Long walletId, boolean freeze) {
+        Wallet wallet = walletRepository.findById(walletId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
+
+        wallet.setStatus(freeze ? WalletStatus.FROZEN : WalletStatus.ACTIVE);
+        return walletRepository.save(wallet);
+    }
+
+    // List wallets, optionally by school code
+    @Transactional(readOnly = true)
+    public List<Wallet> listWallets(String schoolCode) {
+        if (schoolCode == null || schoolCode.isBlank()) {
+            return walletRepository.findAll();
+        }
+        return studentRepository.findBySchool_Code(schoolCode).stream()
+                .map(Student::getWallet)
+                .filter(Objects::nonNull)
+                .toList();
+    }
 //
 //    private String getDarajaAccessToken() {
 //        String consumerKey = "YOUR_CONSUMER_KEY";
