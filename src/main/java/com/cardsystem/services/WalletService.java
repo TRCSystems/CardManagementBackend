@@ -246,7 +246,9 @@ public class WalletService {
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
 
         wallet.setStatus(freeze ? WalletStatus.FROZEN : WalletStatus.ACTIVE);
-        return walletRepository.save(wallet);
+        walletRepository.saveAndFlush(wallet); // ensure DB is updated before returning
+        return walletRepository.findById(walletId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
     }
 
     // List wallets, optionally by school code
