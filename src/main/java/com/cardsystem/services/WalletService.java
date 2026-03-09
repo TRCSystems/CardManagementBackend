@@ -33,6 +33,7 @@ public class WalletService {
     private final WalletRepository walletRepository;
     private final LedgerTransactionRepository transactionRepository;
     private final StudentRepository studentRepository;
+    private final AuditService auditService;
 
 
     // C2B Callback Handler (from M-Pesa)
@@ -47,12 +48,18 @@ public class WalletService {
 
         // Validate shortCode is yours
         if (!shortCode.equals("YOUR_PAYBILL_SHORTCODE")) {
+            auditService.logFailure(AuditService.ACTION_WALLET_MPESA_C2B, AuditService.CATEGORY_WALLET, 
+                "Invalid shortcode: " + shortCode, "Invalid shortcode");
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid shortcode");
         }
 
         // Find student by reference (studentID)
         Student student = (Student) studentRepository.findByStudentNumber(reference)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Student not found"));
+                .orElseThrow(() -> {
+                    auditService.logFailure(AuditService.ACTION_WALLET_MPESA_C2B, AuditService.CATEGORY_WALLET, 
+                        "Student not found for reference: " + reference, "Student not found");
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "Student not found");
+                });
 
         Wallet wallet = student.getWallet();
 
@@ -61,6 +68,9 @@ public class WalletService {
         // Check if already processed (idempotency)
         if (transactionRepository.existsByReference(mpesaReceipt)) {
             log.info("Duplicate transaction: " + mpesaReceipt);
+            auditService.logAction(AuditService.ACTION_WALLET_MPESA_C2B, AuditService.CATEGORY_WALLET, 
+                AuditService.ENTITY_WALLET, wallet.getId(),
+                "Duplicate M-Pesa transaction ignored: " + mpesaReceipt);
             return;
         }
 
@@ -81,6 +91,11 @@ public class WalletService {
             wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
             walletRepository.save(wallet);
         }
+        
+        auditService.logAction(AuditService.ACTION_WALLET_MPESA_C2B, AuditService.CATEGORY_WALLET, 
+            AuditService.ENTITY_WALLET, wallet.getId(),
+            "M-Pesa C2B: Credited " + amount + " from " + phone + " (Receipt: " + mpesaReceipt + ")",
+            null, "{\"cachedBalance\":" + wallet.getCachedBalance() + "}");
     }
 
 //    // Initiate B2C payout (for canteen withdrawal)
@@ -213,8 +228,14 @@ public class WalletService {
     @Transactional
     public void manualAdjust(Long walletId, BigDecimal amount, String reason) {
         Wallet wallet = walletRepository.findById(walletId)
-                .orElseThrow();
+                .orElseThrow(() -> {
+                    auditService.logFailure(AuditService.ACTION_WALLET_ADJUSTED, AuditService.CATEGORY_WALLET, 
+                        "Wallet not found: " + walletId, "Wallet not found");
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found");
+                });
 
+        BigDecimal previousBalance = wallet.getCachedBalance();
+        
         LedgerTransaction txn = new LedgerTransaction();
         txn.setWallet(wallet);
         txn.setType(amount.compareTo(BigDecimal.ZERO) > 0 ? TransactionType.CREDIT : TransactionType.DEBIT);
@@ -229,6 +250,14 @@ public class WalletService {
         // Update cached
         wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
         walletRepository.save(wallet);
+        
+        String actionType = amount.compareTo(BigDecimal.ZERO) > 0 ? 
+            AuditService.ACTION_WALLET_CREDIT : AuditService.ACTION_WALLET_DEBIT;
+        auditService.logAction(actionType, AuditService.CATEGORY_WALLET, 
+            AuditService.ENTITY_WALLET, wallet.getId(),
+            "Manual wallet adjustment: " + amount + " | Reason: " + reason,
+            "{\"cachedBalance\":" + previousBalance + "}",
+            "{\"cachedBalance\":" + wallet.getCachedBalance() + "}");
     }
 
     // Manual adjust that returns updated wallet (used by controller)
@@ -243,12 +272,25 @@ public class WalletService {
     @Transactional
     public Wallet setFreeze(Long walletId, boolean freeze) {
         Wallet wallet = walletRepository.findById(walletId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
+                .orElseThrow(() -> {
+                    auditService.logFailure(freeze ? AuditService.ACTION_WALLET_FROZEN : AuditService.ACTION_WALLET_UNFROZEN, 
+                        AuditService.CATEGORY_WALLET, "Wallet not found: " + walletId, "Wallet not found");
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found");
+                });
 
+        String previousStatus = wallet.getStatus().name();
         wallet.setStatus(freeze ? WalletStatus.FROZEN : WalletStatus.ACTIVE);
         walletRepository.saveAndFlush(wallet); // ensure DB is updated before returning
-        return walletRepository.findById(walletId)
+        Wallet savedWallet = walletRepository.findById(walletId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
+        
+        auditService.logAction(freeze ? AuditService.ACTION_WALLET_FROZEN : AuditService.ACTION_WALLET_UNFROZEN, 
+            AuditService.CATEGORY_WALLET, AuditService.ENTITY_WALLET, wallet.getId(),
+            "Wallet " + (freeze ? "frozen" : "unfrozen"),
+            "{\"status\":\"" + previousStatus + "\"}",
+            "{\"status\":\"" + savedWallet.getStatus() + "\"}");
+        
+        return savedWallet;
     }
 
     // List wallets, optionally by school code

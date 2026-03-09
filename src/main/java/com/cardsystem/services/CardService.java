@@ -31,18 +31,24 @@ public class CardService {
     private final CardAssignmentRepository assignmentRepository;
     private final StudentRepository studentRepository;
     private final SchoolRepository schoolRepository;
-    // private final AuditService auditService;  // add later
+    private final AuditService auditService;
 
     @Transactional
     public Card issueCard(String uidRaw, String schoolId) throws ChangeSetPersister.NotFoundException {
         String uid = uidRaw.trim().toUpperCase();
 
         if (cardRepository.existsByUid(uid)) {
+            auditService.logFailure(AuditService.ACTION_CARD_ISSUED, AuditService.CATEGORY_CARD, 
+                "Card UID already exists: " + uid, "Card UID already exists");
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Card UID already exists: " + uid);
         }
 
         School school = schoolRepository.findById(schoolId)
-                .orElseThrow(() -> new ChangeSetPersister.NotFoundException());
+                .orElseThrow(() -> {
+                    auditService.logFailure(AuditService.ACTION_CARD_ISSUED, AuditService.CATEGORY_CARD, 
+                        "School not found: " + schoolId, "School not found");
+                    return new ChangeSetPersister.NotFoundException();
+                });
 
         Card card = new Card();
         card.setUid(uid);
@@ -50,7 +56,13 @@ public class CardService {
         card.setStatus(CardStatus.UNASSIGNED);
         card.setIssuedAt(LocalDateTime.now());
 
-        return cardRepository.save(card);
+        Card savedCard = cardRepository.save(card);
+        
+        auditService.logAction(AuditService.ACTION_CARD_ISSUED, AuditService.CATEGORY_CARD, 
+            AuditService.ENTITY_CARD, savedCard.getId(),
+            "Card issued with UID: " + uid + " for school: " + school.getCode());
+        
+        return savedCard;
     }
 
     @Transactional
@@ -58,15 +70,24 @@ public class CardService {
         Card card = getCardForUpdate(cardId);  // with lock
 
         if (card.getStatus() != CardStatus.UNASSIGNED) {
+            auditService.logFailure(AuditService.ACTION_CARD_BOUND, AuditService.CATEGORY_CARD, 
+                "Card " + cardId + " is not available for binding (status: " + card.getStatus() + ")",
+                "Card not available for binding");
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Card is not available for binding (status: " + card.getStatus() + ")");
         }
 
         Student student = studentRepository.findById(studentId)
-                .orElseThrow(() -> new ChangeSetPersister.NotFoundException());
+                .orElseThrow(() -> {
+                    auditService.logFailure(AuditService.ACTION_CARD_BOUND, AuditService.CATEGORY_CARD, 
+                        "Student not found: " + studentId, "Student not found");
+                    return new ChangeSetPersister.NotFoundException();
+                });
 
         // Check student doesn't already have active card
         Optional<CardAssignment> existing = assignmentRepository.findByStudentAndUnassignedAtIsNull(student);
         if (existing.isPresent()) {
+            auditService.logFailure(AuditService.ACTION_CARD_BOUND, AuditService.CATEGORY_CARD, 
+                "Student " + studentId + " already has active card", "Student already has active card");
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Student already has an active card (ID: " + existing.get().getCard().getId() + ")");
         }
 
@@ -81,29 +102,47 @@ public class CardService {
         card.setStatus(CardStatus.ASSIGNED);
         card.setCurrentAssignmentId(assignment.getId());
 
-        return cardRepository.save(card);
+        Card savedCard = cardRepository.save(card);
+        
+        auditService.logAction(AuditService.ACTION_CARD_BOUND, AuditService.CATEGORY_CARD, 
+            AuditService.ENTITY_CARD, savedCard.getId(),
+            "Card " + card.getUid() + " bound to student: " + student.getStudentNumber() + " (" + student.getName() + ")",
+            null, null);
+        
+        return savedCard;
     }
 
     @Transactional
     public Card blockCard(Long cardId) {
         Card card = getCardForUpdate(cardId);
         if (card.getStatus() == CardStatus.BLOCKED) {
+            auditService.logFailure(AuditService.ACTION_CARD_BLOCKED, AuditService.CATEGORY_CARD, 
+                "Card " + cardId + " is already blocked", "Card already blocked");
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Card is already blocked");
         }
         if (card.getStatus() == CardStatus.RETIRED) {
+            auditService.logFailure(AuditService.ACTION_CARD_BLOCKED, AuditService.CATEGORY_CARD, 
+                "Cannot block retired card " + cardId, "Cannot block retired card");
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Cannot block retired card");
         }
 
-        card.setStatus(CardStatus.BLOCKED);
-        // audit later
+        Card savedCard = cardRepository.save(card);
+        
+        auditService.logAction(AuditService.ACTION_CARD_BLOCKED, AuditService.CATEGORY_CARD, 
+            AuditService.ENTITY_CARD, savedCard.getId(),
+            "Card " + card.getUid() + " blocked",
+            "{\"status\":\"" + card.getStatus() + "\"}",
+            "{\"status\":\"BLOCKED\"}");
 
-        return cardRepository.save(card);
+        return savedCard;
     }
 
     @Transactional
     public Card retireCard(Long cardId) {
         Card card = getCardForUpdate(cardId);
         if (card.getStatus() == CardStatus.RETIRED) {
+            auditService.logFailure(AuditService.ACTION_CARD_RETIRED, AuditService.CATEGORY_CARD, 
+                "Card " + cardId + " is already retired", "Card already retired");
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Card is already retired");
         }
 
@@ -118,7 +157,15 @@ public class CardService {
                     assignmentRepository.save(assignment);
                 });
 
-        return cardRepository.save(card);
+        Card savedCard = cardRepository.save(card);
+        
+        auditService.logAction(AuditService.ACTION_CARD_RETIRED, AuditService.CATEGORY_CARD, 
+            AuditService.ENTITY_CARD, savedCard.getId(),
+            "Card " + card.getUid() + " retired",
+            "{\"status\":\"" + card.getStatus() + "\"}",
+            "{\"status\":\"RETIRED\"}");
+
+        return savedCard;
     }
 
     // Helper – get card with pessimistic lock if needed

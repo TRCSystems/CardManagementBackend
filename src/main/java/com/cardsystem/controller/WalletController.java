@@ -37,7 +37,7 @@ public class WalletController {
     }
 
     @PostMapping("/adjust")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN','SCHOOL_ADMIN')")
     @Transactional
     public ResponseEntity<WalletResponse> adjust(@Valid @RequestBody WalletAdjustRequest request) {
         Wallet wallet = walletService.manualAdjustAndReturn(request.getWalletId(), request.getAmount(), request.getReason());
@@ -45,7 +45,7 @@ public class WalletController {
     }
 
     @PostMapping("/freeze")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN','SCHOOL_ADMIN')")
     @Transactional
     public ResponseEntity<WalletResponse> freeze(@Valid @RequestBody WalletFreezeRequest request) {
         Wallet wallet = walletService.setFreeze(request.getWalletId(), request.isFreeze());
