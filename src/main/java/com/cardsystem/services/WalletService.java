@@ -2,15 +2,19 @@ package com.cardsystem.services;
 
 // WalletService.java
 
+import com.cardsystem.dto.MpesaC2BCallbackRequest;
 import com.cardsystem.models.LedgerTransaction;
 import com.cardsystem.models.Student;
+import com.cardsystem.models.WalletTransaction;
 import com.cardsystem.models.constants.TransactionStatus;
 import com.cardsystem.models.constants.TransactionType;
+import com.cardsystem.models.constants.TransactionSource;
 import com.cardsystem.models.Wallet;
 import com.cardsystem.models.constants.WalletStatus;
 import com.cardsystem.repository.LedgerTransactionRepository;
 import com.cardsystem.repository.StudentRepository;
 import com.cardsystem.repository.WalletRepository;
+import com.cardsystem.repository.WalletTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
@@ -33,54 +37,71 @@ public class WalletService {
     private final WalletRepository walletRepository;
     private final LedgerTransactionRepository transactionRepository;
     private final StudentRepository studentRepository;
+    private final WalletTransactionRepository walletTransactionRepository;
 
 
     // C2B Callback Handler (from M-Pesa)
     @Transactional
-    public void handleC2BCallback(Map<String, Object> payload) {
+    public void handleC2BCallback(MpesaC2BCallbackRequest payload) {
         // Extract from payload
-        String shortCode = (String) payload.get("BusinessShortCode");
-        String amountStr = (String) payload.get("TransAmount");
-        String reference = (String) payload.get("BillRefNumber");  // student ID
-        String mpesaReceipt = (String) payload.get("TransID");
-        String phone = (String) payload.get("MSISDN");
+        String shortCode = payload.getBusinessShortCode();
+        String amountStr = payload.getTransAmount();
+        String billRefNumber = payload.getBillRefNumber();  // student ID
+        String transId = payload.getTransID();
+        String phone = payload.getMsisdn();
 
         // Validate shortCode is yours
         if (!shortCode.equals("YOUR_PAYBILL_SHORTCODE")) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid shortcode");
         }
 
-        // Find student by reference (studentID)
-        Student student = (Student) studentRepository.findByStudentNumber(reference)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Student not found"));
-
-        Wallet wallet = student.getWallet();
-
-        BigDecimal amount = new BigDecimal(amountStr);
-
-        // Check if already processed (idempotency)
-        if (transactionRepository.existsByReference(mpesaReceipt)) {
-            log.info("Duplicate transaction: " + mpesaReceipt);
+        // Idempotency: skip if we already processed this provider transaction id
+        if (walletTransactionRepository.existsBySourceAndProviderTransactionId(TransactionSource.MPESA, transId)) {
+            log.info("Duplicate transaction: {}", transId);
             return;
         }
 
-        // Create ledger entry
-        LedgerTransaction txn = new LedgerTransaction();
-        txn.setWallet(wallet);
-        txn.setType(TransactionType.CREDIT);
-        txn.setAmount(amount);
-        txn.setSource("MPESA");
-        txn.setReference(mpesaReceipt);
-        txn.setStatus(TransactionStatus.CONFIRMED);  // assume callback is confirmation
-        txn.setDetails("Phone: " + phone);
+        BigDecimal amount = new BigDecimal(amountStr);
 
-        transactionRepository.save(txn);
+        // Prepare wallet transaction record first (even if student not found)
+        WalletTransaction walletTxn = new WalletTransaction();
+        walletTxn.setExternalReference(transId);
+        walletTxn.setProviderTransactionId(transId);
+        walletTxn.setBillRefNumber(billRefNumber);
+        walletTxn.setSource(TransactionSource.MPESA);
+        walletTxn.setType(TransactionType.CREDIT);
+        walletTxn.setAmount(amount);
+        walletTxn.setStatus(TransactionStatus.PENDING); // will be updated below
 
-        // Update cached balance if using
-        if (wallet.getCachedBalance() != null) {
-            wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
-            walletRepository.save(wallet);
-        }
+        // Find student by reference (studentID)
+        studentRepository.findByStudentNumber(billRefNumber).ifPresentOrElse(student -> {
+            Wallet wallet = student.getWallet();
+            walletTxn.setWallet(wallet);
+            walletTxn.confirm(); // sets status CONFIRMED + confirmedAt
+
+            // Also record in ledger for balance computation
+            LedgerTransaction txn = new LedgerTransaction();
+            txn.setWallet(wallet);
+            txn.setType(TransactionType.CREDIT);
+            txn.setAmount(amount);
+            txn.setSource("MPESA");
+            txn.setReference(transId);
+            txn.setStatus(TransactionStatus.CONFIRMED);  // assume callback is confirmation
+            txn.setDetails("Phone: " + phone);
+            transactionRepository.save(txn);
+
+            // Update cached balance if using
+            if (wallet.getCachedBalance() != null) {
+                wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
+                walletRepository.save(wallet);
+            }
+        }, () -> {
+            // Student not found; leave wallet null and mark pending confirmation for manual reconciliation
+            walletTxn.markPendingConfirmation();
+            log.warn("C2B received for unknown BillRefNumber {} (TransID {})", billRefNumber, transId);
+        });
+
+        walletTransactionRepository.save(walletTxn);
     }
 
 //    // Initiate B2C payout (for canteen withdrawal)

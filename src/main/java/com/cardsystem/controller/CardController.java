@@ -129,4 +129,20 @@ public class CardController {
         return ResponseEntity.ok(list);
     }
 
+    // Additional assign endpoint to match spec: POST /cards/assign
+    @PostMapping("/assign")
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN')")
+    public ResponseEntity<CardActionResponse> assignCard(@Valid @RequestBody AssignCardRequest request) throws ChangeSetPersister.NotFoundException {
+
+        Card updated = cardService.bindCard(request.getCardId(), request.getStudentId());
+
+        return ResponseEntity.ok(CardActionResponse.builder()
+                .cardId(updated.getId())
+                .uid(updated.getUid())
+                .status(updated.getStatus())
+                .studentId(request.getStudentId())
+                .message("Card successfully assigned to student ID " + request.getStudentId())
+                .build());
+    }
+
 }

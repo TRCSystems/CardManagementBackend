@@ -12,7 +12,6 @@ import java.time.LocalDateTime;
         name = "wallets",
         uniqueConstraints = @UniqueConstraint(columnNames = "student_id")
 )
-@Getter
 @NoArgsConstructor(access = AccessLevel.PUBLIC)
 @ToString(exclude = "student")
 public class Wallet {
