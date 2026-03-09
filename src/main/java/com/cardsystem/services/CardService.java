@@ -1,14 +1,16 @@
 package com.cardsystem.services;
+import com.cardsystem.dto.CardFullDetailsResponse;
 import com.cardsystem.models.Card;
 import com.cardsystem.models.CardAssignment;
 import com.cardsystem.models.School;
 import com.cardsystem.models.Student;
+import com.cardsystem.models.Wallet;
 import com.cardsystem.models.constants.CardStatus;
 import com.cardsystem.repository.CardAssignmentRepository;
 import com.cardsystem.repository.CardRepository;
 import com.cardsystem.repository.SchoolRepository;
 import com.cardsystem.repository.StudentRepository;
-import jakarta.transaction.Transactional;
+import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.crossstore.ChangeSetPersister;
@@ -205,5 +207,81 @@ public class CardService {
         }
 
         return out;
+    }
+
+    /**
+     * Get full details of a card including student and wallet information.
+     */
+    @Transactional(readOnly = true)
+    public CardFullDetailsResponse getFullCardDetails(Long cardId) {
+        Card card = cardRepository.findById(cardId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Card not found: " + cardId));
+
+        return buildCardFullDetails(card);
+    }
+
+    /**
+     * Get full details of ALL cards including student and wallet information.
+     */
+    @Transactional(readOnly = true)
+    public List<CardFullDetailsResponse> getAllFullCardDetails() {
+        List<Card> cards = cardRepository.findAll();
+        return cards.stream()
+                .map(this::buildCardFullDetails)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Get full details of cards by school including student and wallet information.
+     */
+    @Transactional(readOnly = true)
+    public List<CardFullDetailsResponse> getFullCardDetailsBySchool(String schoolCode) {
+        List<Card> cards = cardRepository.findBySchool_Code(schoolCode);
+        return cards.stream()
+                .map(this::buildCardFullDetails)
+                .collect(Collectors.toList());
+    }
+
+    /**
+     * Build CardFullDetailsResponse from Card entity.
+     */
+    private CardFullDetailsResponse buildCardFullDetails(Card card) {
+        CardFullDetailsResponse.CardFullDetailsResponseBuilder builder = CardFullDetailsResponse.builder()
+                .cardId(card.getId())
+                .cardUid(card.getUid())
+                .cardStatus(card.getStatus())
+                .issuedAt(card.getIssuedAt())
+                .retiredAt(card.getRetiredAt())
+                .schoolCode(card.getSchool().getCode())
+                .schoolName(card.getSchool().getName());
+
+        // Check if card is assigned to a student
+        if (card.getCurrentAssignmentId() != null) {
+            CardAssignment assignment = assignmentRepository.findById(card.getCurrentAssignmentId())
+                    .orElse(null);
+
+            if (assignment != null && assignment.getUnassignedAt() == null) {
+                Student student = assignment.getStudent();
+                builder.studentId(student.getId())
+                        .studentNumber(student.getStudentNumber())
+                        .studentName(student.getName())
+                        .classGrade(student.getClassGrade())
+                        .studentCreatedAt(student.getCreatedAt())
+                        .assignedAt(assignment.getAssignedAt())
+                        .assignedBy(assignment.getAssignedBy() != null ? assignment.getAssignedBy().getUsername() : null);
+
+                // Get wallet details if wallet exists
+                if (student.getWallet() != null) {
+                    Wallet wallet = student.getWallet();
+                    builder.walletId(wallet.getId())
+                            .walletBalance(wallet.getCachedBalance())
+                            .walletStatus(wallet.getStatus())
+                            .walletCreatedAt(wallet.getCreatedAt())
+                            .walletUpdatedAt(wallet.getUpdatedAt());
+                }
+            }
+        }
+
+        return builder.build();
     }
 }
