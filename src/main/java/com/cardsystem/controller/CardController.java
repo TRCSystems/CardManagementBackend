@@ -15,6 +15,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/cards")
 @RequiredArgsConstructor
@@ -127,6 +129,39 @@ public class CardController {
         java.util.List<com.cardsystem.dto.CardActionResponse> list = cardService.listCardsBySchoolWithAssignment(schoolId);
 
         return ResponseEntity.ok(list);
+    }
+
+    // Additional assign endpoint to match spec: POST /cards/assign
+    @PostMapping("/assign")
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN')")
+    public ResponseEntity<CardActionResponse> assignCard(@Valid @RequestBody AssignCardRequest request) throws ChangeSetPersister.NotFoundException {
+
+        Card updated = cardService.bindCard(request.getCardId(), request.getStudentId());
+
+        return ResponseEntity.ok(CardActionResponse.builder()
+                .cardId(updated.getId())
+                .uid(updated.getUid())
+                .status(updated.getStatus())
+                .studentId(request.getStudentId())
+                .message("Card successfully assigned to student ID " + request.getStudentId())
+                .build());
+    }
+
+}
+    // ───────────────────────────────────────────────-
+    // 6. Get full card details for ALL cards (card + student + wallet)
+    // ───────────────────────────────────────────────-
+    @GetMapping("/full-details")
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY')")
+    public ResponseEntity<List<CardFullDetailsResponse>> getAllCardsFullDetails(
+            @RequestParam(required = false) String schoolId) {
+        List<CardFullDetailsResponse> details;
+        if (schoolId != null && !schoolId.isBlank()) {
+            details = cardService.getFullCardDetailsBySchool(schoolId);
+        } else {
+            details = cardService.getAllFullCardDetails();
+        }
+        return ResponseEntity.ok(details);
     }
 
 }

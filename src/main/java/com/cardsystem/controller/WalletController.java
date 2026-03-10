@@ -3,6 +3,7 @@ package com.cardsystem.controller;
 import com.cardsystem.dto.WalletAdjustRequest;
 import com.cardsystem.dto.WalletFreezeRequest;
 import com.cardsystem.dto.WalletResponse;
+import com.cardsystem.dto.MpesaC2BCallbackRequest;
 import com.cardsystem.models.Student;
 import com.cardsystem.models.Wallet;
 import com.cardsystem.services.WalletService;
@@ -37,7 +38,7 @@ public class WalletController {
     }
 
     @PostMapping("/adjust")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN','SCHOOL_ADMIN')")
     @Transactional
     public ResponseEntity<WalletResponse> adjust(@Valid @RequestBody WalletAdjustRequest request) {
         Wallet wallet = walletService.manualAdjustAndReturn(request.getWalletId(), request.getAmount(), request.getReason());
@@ -45,11 +46,22 @@ public class WalletController {
     }
 
     @PostMapping("/freeze")
-    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN')")
+    @PreAuthorize("hasAnyRole('SUPER_ADMIN','FINANCE_ADMIN','SCHOOL_ADMIN')")
     @Transactional
     public ResponseEntity<WalletResponse> freeze(@Valid @RequestBody WalletFreezeRequest request) {
         Wallet wallet = walletService.setFreeze(request.getWalletId(), request.isFreeze());
         return ResponseEntity.ok(toDto(wallet));
+    }
+
+    /**
+     * M-Pesa C2B confirmation webhook (from Payments-service).
+     * Public because it is called service-to-service; protect at the edge (network/API gateway).
+     */
+    @PostMapping("/c2b/confirmation")
+    @Transactional
+    public ResponseEntity<Void> mpesaC2BConfirmation(@RequestBody MpesaC2BCallbackRequest request) {
+        walletService.handleC2BCallback(request);
+        return ResponseEntity.ok().build();
     }
 
     private WalletResponse toDto(Wallet wallet) {

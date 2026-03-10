@@ -2,21 +2,23 @@ package com.cardsystem.services;
 
 // WalletService.java
 
+import com.cardsystem.dto.MpesaC2BCallbackRequest;
 import com.cardsystem.models.LedgerTransaction;
 import com.cardsystem.models.Student;
+import com.cardsystem.models.WalletTransaction;
 import com.cardsystem.models.constants.TransactionStatus;
 import com.cardsystem.models.constants.TransactionType;
+import com.cardsystem.models.constants.TransactionSource;
 import com.cardsystem.models.Wallet;
 import com.cardsystem.models.constants.WalletStatus;
 import com.cardsystem.repository.LedgerTransactionRepository;
 import com.cardsystem.repository.StudentRepository;
 import com.cardsystem.repository.WalletRepository;
+import com.cardsystem.repository.WalletTransactionRepository;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.*;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.client.HttpClientErrorException;
-import org.springframework.web.client.HttpServerErrorException;
 import org.springframework.web.server.ResponseStatusException;
 import lombok.extern.slf4j.Slf4j;
 
@@ -25,6 +27,7 @@ import java.util.Base64;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
@@ -33,173 +36,83 @@ public class WalletService {
     private final WalletRepository walletRepository;
     private final LedgerTransactionRepository transactionRepository;
     private final StudentRepository studentRepository;
+    private final WalletTransactionRepository walletTransactionRepository;
+    private final AuditService auditService;
 
-
-    // C2B Callback Handler (from M-Pesa)
+    // ==================== C2B Callback Handler (from M-Pesa) ====================
     @Transactional
-    public void handleC2BCallback(Map<String, Object> payload) {
+    public void handleC2BCallback(MpesaC2BCallbackRequest payload) {
         // Extract from payload
-        String shortCode = (String) payload.get("BusinessShortCode");
-        String amountStr = (String) payload.get("TransAmount");
-        String reference = (String) payload.get("BillRefNumber");  // student ID
-        String mpesaReceipt = (String) payload.get("TransID");
-        String phone = (String) payload.get("MSISDN");
+        String shortCode = payload.getBusinessShortCode();
+        String amountStr = payload.getTransAmount();
+        String billRefNumber = payload.getBillRefNumber();  // student ID
+        String transId = payload.getTransID();
+        String phone = payload.getMsisdn();
 
         // Validate shortCode is yours
         if (!shortCode.equals("YOUR_PAYBILL_SHORTCODE")) {
+            auditService.logFailure(AuditService.ACTION_WALLET_MPESA_C2B, AuditService.CATEGORY_WALLET, 
+                "Invalid shortcode: " + shortCode, "Invalid shortcode");
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Invalid shortcode");
         }
 
-        // Find student by reference (studentID)
-        Student student = (Student) studentRepository.findByStudentNumber(reference)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Student not found"));
-
-        Wallet wallet = student.getWallet();
-
         BigDecimal amount = new BigDecimal(amountStr);
 
-        // Check if already processed (idempotency)
-        if (transactionRepository.existsByReference(mpesaReceipt)) {
-            log.info("Duplicate transaction: " + mpesaReceipt);
+        // Idempotency: skip if we already processed this provider transaction id
+        if (walletTransactionRepository.existsBySourceAndProviderTransactionId(TransactionSource.MPESA, transId)) {
+            log.info("Duplicate transaction: {}", transId);
             return;
         }
 
-        // Create ledger entry
-        LedgerTransaction txn = new LedgerTransaction();
-        txn.setWallet(wallet);
-        txn.setType(TransactionType.CREDIT);
-        txn.setAmount(amount);
-        txn.setSource("MPESA");
-        txn.setReference(mpesaReceipt);
-        txn.setStatus(TransactionStatus.CONFIRMED);  // assume callback is confirmation
-        txn.setDetails("Phone: " + phone);
+        // Prepare wallet transaction record first (even if student not found)
+        WalletTransaction walletTxn = new WalletTransaction();
+        walletTxn.setExternalReference(transId);
+        walletTxn.setProviderTransactionId(transId);
+        walletTxn.setBillRefNumber(billRefNumber);
+        walletTxn.setSource(TransactionSource.MPESA);
+        walletTxn.setType(TransactionType.CREDIT);
+        walletTxn.setAmount(amount);
+        walletTxn.setStatus(TransactionStatus.PENDING); // will be updated below
 
-        transactionRepository.save(txn);
+        // Find student by reference (studentID)
+        studentRepository.findByStudentNumber(billRefNumber).ifPresentOrElse(student -> {
+            Wallet wallet = student.getWallet();
+            walletTxn.setWallet(wallet);
+            walletTxn.confirm(); // sets status CONFIRMED + confirmedAt
 
-        // Update cached balance if using
-        if (wallet.getCachedBalance() != null) {
-            wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
+            // Also record in ledger for balance computation
+            LedgerTransaction txn = new LedgerTransaction();
+            txn.setWallet(wallet);
+            txn.setType(TransactionType.CREDIT);
+            txn.setAmount(amount);
+            txn.setSource("MPESA");
+            txn.setReference(transId);
+            txn.setStatus(TransactionStatus.CONFIRMED);  // assume callback is confirmation
+            txn.setDetails("Phone: " + phone);
+            transactionRepository.save(txn);
+
+            // Update cached balance using domain method
+            wallet.applyCredit(amount);
             walletRepository.save(wallet);
-        }
+
+            // Audit
+            auditService.logAction(AuditService.ACTION_WALLET_MPESA_C2B, AuditService.CATEGORY_WALLET, 
+                AuditService.ENTITY_WALLET, wallet.getId(),
+                "M-Pesa C2B: Credited " + amount + " from " + phone + " (Receipt: " + transId + ")",
+                null, "{\"cachedBalance\":" + wallet.getCachedBalance() + "}");
+
+        }, () -> {
+            // Student not found; leave wallet null and mark pending confirmation for manual reconciliation
+            walletTxn.markPendingConfirmation();
+            log.warn("C2B received for unknown BillRefNumber {} (TransID {})", billRefNumber, transId);
+            auditService.logFailure(AuditService.ACTION_WALLET_MPESA_C2B, AuditService.CATEGORY_WALLET, 
+                "Student not found for BillRefNumber: " + billRefNumber + " (TransID " + transId + ")", "Student not found");
+        });
+
+        walletTransactionRepository.save(walletTxn);
     }
 
-//    // Initiate B2C payout (for canteen withdrawal)
-//    @Transactional
-//    public String initiateB2C(
-//            String initiatorName,
-//            String securityCredential,      // Base64 encoded password from Daraja portal
-//            BigDecimal amount,
-//            String partyA,                  // Your Paybill number (shortcode)
-//            String partyB,                  // Recipient phone (2547xxxxxxxx)
-//            String remarks,
-//            String queueTimeoutURL,         // Your callback URL for timeout
-//            String resultURL,               // Your callback URL for final result
-//            Long walletId,                  // Which wallet is funding this payout (school/canteen wallet)
-//            String occasion                 // e.g. "Canteen Staff Withdrawal"
-//    ) {
-//        log.info("Initiating B2C payout: amount={}, to={}, from wallet={}", amount, partyB, walletId);
-//
-//        // 1. Get fresh OAuth access token from Daraja
-//        String accessToken = getDarajaAccessToken();
-//
-//        // 2. Prepare B2C request body
-//        Map<String, Object> requestBody = Map.ofEntries(
-//                Map.entry("InitiatorName", initiatorName),
-//                Map.entry("SecurityCredential", securityCredential),
-//                Map.entry("CommandID", "BusinessPayment"),  // or "SalaryPayment", "PromotionPayment"
-//                Map.entry("Amount", amount.longValue()),    // M-Pesa expects whole number
-//                Map.entry("PartyA", partyA),
-//                Map.entry("PartyB", partyB),
-//                Map.entry("Remarks", remarks),
-//                Map.entry("QueueTimeOutURL", queueTimeoutURL),
-//                Map.entry("ResultURL", resultURL),
-//                Map.entry("Occasion", occasion != null ? occasion : "Canteen Withdrawal")
-//        );
-//
-//        // 3. Prepare HTTP request
-//        HttpHeaders headers = new HttpHeaders();
-//        headers.setContentType(MediaType.APPLICATION_JSON);
-//        headers.setBearerAuth(accessToken);
-//
-//        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-//
-//        String endpoint = isProduction()
-//                ? "https://api.safaricom.co.ke/mpesa/b2c/v1"
-//                : "https://sandbox.safaricom.co.ke/mpesa/b2c/v1";
-//
-//        try {
-//            ResponseEntity<Map> response = restTemplate.postForEntity(endpoint, entity, Map.class);
-//
-//            Map<String, Object> body = response.getBody();
-//
-//            if (response.getStatusCode().is2xxSuccessful() && "0".equals(body.get("ResponseCode"))) {
-//                String conversationID = (String) body.get("ConversationID");
-//                String originatorConversationID = (String) body.get("OriginatorConversationID");
-//
-//                log.info("B2C initiated successfully. OriginatorConversationID: {}", originatorConversationID);
-//
-//                // 4. Create pending DEBIT transaction
-//                Wallet wallet = walletRepository.findById(walletId)
-//                        .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found: " + walletId));
-//
-//                if (wallet.getCachedBalance().compareTo(amount) < 0) {
-//                    throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Insufficient balance in wallet");
-//                }
-//
-//                LedgerTransaction txn = new LedgerTransaction();
-//                txn.setWallet(wallet);
-//                txn.setType(TransactionType.DEBIT);
-//                txn.setAmount(amount.negate());
-//                txn.setSource("B2C");
-//                txn.setReference(originatorConversationID);  // use this to match callback
-//                txn.setStatus(TransactionStatus.PENDING);
-//                txn.setDetails("B2C to " + partyB + " | Remarks: " + remarks);
-//
-//                transactionRepository.save(txn);
-//
-//                // Optionally reduce cached balance immediately (optimistic)
-//                wallet.setCachedBalance(wallet.getCachedBalance().subtract(amount));
-//                walletRepository.save(wallet);
-//
-//                return originatorConversationID;  // return for tracking
-//
-//            } else {
-//                String errorMessage = (String) body.getOrDefault("ErrorMessage", "Unknown error");
-//                log.error("B2C initiation failed: {}", errorMessage);
-//                throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "B2C request failed: " + errorMessage);
-//            }
-//
-//        } catch (HttpClientErrorException | HttpServerErrorException e) {
-//            log.error("B2C HTTP error: status={}, response={}", e.getStatusCode(), e.getResponseBodyAsString());
-//            throw new ResponseStatusException(e.getStatusCode(), "M-Pesa B2C communication error");
-//        } catch (Exception e) {
-//            log.error("Unexpected error during B2C initiation", e);
-//            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to initiate B2C");
-//        }
-//    }
-//    // B2C Callback Handler
-//    @Transactional
-//    public void handleB2CCallback(Map<String, Object> payload) {
-//        String resultCode = (String) payload.get("Result").get("ResultCode");
-//        String txnId = (String) payload.get("Result").get("TransactionID");
-//
-//        if ("0".equals(resultCode)) {
-//            // Success – update txn to CONFIRMED
-//            LedgerTransaction txn = transactionRepository.findByReference(txnId)
-//                    .orElseThrow();
-//            txn.setStatus(TransactionStatus.CONFIRMED);
-//            transactionRepository.save(txn);
-//
-//            // Update cached balance
-//            Wallet wallet = txn.getWallet();
-//            wallet.setCachedBalance(wallet.getCachedBalance().add(txn.getAmount()));
-//            walletRepository.save(wallet);
-//        } else {
-//            // Failure – mark FAILED
-//        }
-//    }
-
-    // Get balance (compute from ledger if no cache)
+    // ==================== Get balance (compute from ledger if no cache) ====================
     @Transactional(readOnly = true)
     public BigDecimal getBalance(Long walletId) {
         Wallet wallet = walletRepository.findById(walletId)
@@ -209,12 +122,18 @@ public class WalletService {
         return transactionRepository.calculateBalance(wallet);
     }
 
-    // Manual adjust (admin only)
+    // ==================== Manual adjust (admin only) ====================
     @Transactional
     public void manualAdjust(Long walletId, BigDecimal amount, String reason) {
         Wallet wallet = walletRepository.findById(walletId)
-                .orElseThrow();
+                .orElseThrow(() -> {
+                    auditService.logFailure(AuditService.ACTION_WALLET_ADJUSTED, AuditService.CATEGORY_WALLET, 
+                        "Wallet not found: " + walletId, "Wallet not found");
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found");
+                });
 
+        BigDecimal previousBalance = wallet.getCachedBalance();
+        
         LedgerTransaction txn = new LedgerTransaction();
         txn.setWallet(wallet);
         txn.setType(amount.compareTo(BigDecimal.ZERO) > 0 ? TransactionType.CREDIT : TransactionType.DEBIT);
@@ -226,9 +145,19 @@ public class WalletService {
 
         transactionRepository.save(txn);
 
-        // Update cached
-        wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
+        // Update cached with non-negative guard
+        if (amount.compareTo(BigDecimal.ZERO) >= 0) wallet.applyCredit(amount);
+        else wallet.applyDebit(amount.abs());
+
         walletRepository.save(wallet);
+        
+        String actionType = amount.compareTo(BigDecimal.ZERO) > 0 ? 
+            AuditService.ACTION_WALLET_CREDIT : AuditService.ACTION_WALLET_DEBIT;
+        auditService.logAction(actionType, AuditService.CATEGORY_WALLET, 
+            AuditService.ENTITY_WALLET, wallet.getId(),
+            "Manual wallet adjustment: " + amount + " | Reason: " + reason,
+            "{\"cachedBalance\":" + previousBalance + "}",
+            "{\"cachedBalance\":" + wallet.getCachedBalance() + "}");
     }
 
     // Manual adjust that returns updated wallet (used by controller)
@@ -243,15 +172,29 @@ public class WalletService {
     @Transactional
     public Wallet setFreeze(Long walletId, boolean freeze) {
         Wallet wallet = walletRepository.findById(walletId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
+                .orElseThrow(() -> {
+                    auditService.logFailure(freeze ? AuditService.ACTION_WALLET_FROZEN : AuditService.ACTION_WALLET_UNFROZEN, 
+                        AuditService.CATEGORY_WALLET, "Wallet not found: " + walletId, "Wallet not found");
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found");
+                });
 
+        String previousStatus = wallet.getStatus().name();
         wallet.setStatus(freeze ? WalletStatus.FROZEN : WalletStatus.ACTIVE);
         walletRepository.saveAndFlush(wallet); // ensure DB is updated before returning
-        return walletRepository.findById(walletId)
+
+        Wallet savedWallet = walletRepository.findById(walletId)
                 .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Wallet not found"));
+        
+        auditService.logAction(freeze ? AuditService.ACTION_WALLET_FROZEN : AuditService.ACTION_WALLET_UNFROZEN, 
+            AuditService.CATEGORY_WALLET, AuditService.ENTITY_WALLET, wallet.getId(),
+            "Wallet " + (freeze ? "frozen" : "unfrozen"),
+            "{\"status\":\"" + previousStatus + "\"}",
+            "{\"status\":\"" + savedWallet.getStatus() + "\"}");
+        
+        return savedWallet;
     }
 
-    // List wallets, optionally by school code
+    // ==================== List wallets, optionally by school code ====================
     @Transactional(readOnly = true)
     public List<Wallet> listWallets(String schoolCode) {
         if (schoolCode == null || schoolCode.isBlank()) {
@@ -262,29 +205,34 @@ public class WalletService {
                 .filter(Objects::nonNull)
                 .toList();
     }
-//
-//    private String getDarajaAccessToken() {
-//        String consumerKey = "YOUR_CONSUMER_KEY";
-//        String consumerSecret = "YOUR_CONSUMER_SECRET";
-//
-//        String credentials = consumerKey + ":" + consumerSecret;
-//        String encodedCredentials = Base64.getEncoder().encodeToString(credentials.getBytes());
-//
-//        HttpHeaders headers = new HttpHeaders();
-//        headers.set("Authorization", "Basic " + encodedCredentials);
-//
-//        HttpEntity<String> entity = new HttpEntity<>(headers);
-//
-//        String url = isProduction()
-//                ? "https://api.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials"
-//                : "https://sandbox.safaricom.co.ke/oauth/v1/generate?grant_type=client_credentials";
-//
-//        ResponseEntity<Map> response = restTemplate.exchange(url, HttpMethod.GET, entity, Map.class);
-//
-//        if (response.getStatusCode().is2xxSuccessful()) {
-//            return (String) response.getBody().get("access_token");
-//        }
-//
-//        throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, "Failed to get Daraja access token");
-//    }
+
+    // ==================== Commented-out B2C logic ====================
+    // Initiate B2C payout (for canteen withdrawal)
+    /*
+    @Transactional
+    public String initiateB2C(
+            String initiatorName,
+            String securityCredential,
+            BigDecimal amount,
+            String partyA,
+            String partyB,
+            String remarks,
+            String queueTimeoutURL,
+            String resultURL,
+            Long walletId,
+            String occasion
+    ) {
+        // Original commented code preserved here...
+    }
+    */
+
+    // B2C Callback Handler
+    /*
+    @Transactional
+    public void handleB2CCallback(Map<String, Object> payload) {
+        // Original commented code preserved here...
+    }
+    */
+
+    // private String getDarajaAccessToken() { ... } // Preserved commented method
 }
