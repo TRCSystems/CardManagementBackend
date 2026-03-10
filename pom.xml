@@ -110,6 +110,12 @@
             <scope>runtime</scope>
         </dependency>
 
+		<dependency>
+			<groupId>io.jsonwebtoken</groupId>
+			<artifactId>jjwt</artifactId>
+			<version>0.9.1</version>   <!-- ← this or similar old version -->
+		</dependency>
+
         <!-- commons-csv (used elsewhere in project) -->
         <dependency>
             <groupId>org.apache.commons</groupId>

@@ -33,55 +33,28 @@ public class WalletTransaction {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    /**
-     * Wallet affected by this transaction.
-     */
     @ManyToOne(fetch = FetchType.LAZY, optional = false)
     @JoinColumn(name = "wallet_id", nullable = false, updatable = false)
     private Wallet wallet;
 
-    /**
-     * CREDIT or DEBIT.
-     * Direction relative to the wallet.
-     */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20, updatable = false)
     private TransactionType type;
 
-    /**
-     * Where this transaction originated from.
-     */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 30, updatable = false)
     private TransactionSource source;
 
-    /**
-     * Amount of the transaction.
-     * Always positive.
-     */
     @Column(nullable = false, precision = 15, scale = 2, updatable = false)
     private BigDecimal amount;
 
-    /**
-     * External idempotency key.
-     * Examples:
-     * - M-Pesa receipt number
-     * - POS transaction UUID
-     */
     @Column(nullable = false, length = 100, updatable = false)
     private String externalReference;
 
-    /**
-     * Transaction lifecycle.
-     */
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
     private TransactionStatus status;
 
-    /**
-     * Optional pointer to another transaction
-     * (used for reversals).
-     */
     @ManyToOne(fetch = FetchType.LAZY)
     @JoinColumn(name = "reversed_transaction_id")
     private WalletTransaction reversedTransaction;
@@ -91,6 +64,26 @@ public class WalletTransaction {
 
     @Column
     private LocalDateTime confirmedAt;
+
+    /* =========================
+       Static factory — only way to construct externally
+       ========================= */
+
+    public static WalletTransaction create(
+            Wallet wallet,
+            TransactionType type,
+            TransactionSource source,
+            BigDecimal amount,
+            String externalReference
+    ) {
+        WalletTransaction tx = new WalletTransaction();
+        tx.wallet = wallet;
+        tx.type = type;
+        tx.source = source;
+        tx.amount = amount;
+        tx.externalReference = externalReference;
+        return tx;
+    }
 
     /* =========================
        Lifecycle hooks
