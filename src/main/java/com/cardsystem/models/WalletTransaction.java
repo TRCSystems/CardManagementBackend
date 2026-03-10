@@ -15,17 +15,24 @@ import java.time.LocalDateTime;
         indexes = {
                 @Index(name = "idx_wallet_tx_wallet", columnList = "wallet_id"),
                 @Index(name = "idx_wallet_tx_reference", columnList = "externalReference"),
+                @Index(name = "idx_wallet_tx_provider_reference", columnList = "providerTransactionId"),
+                @Index(name = "idx_wallet_tx_billref", columnList = "billRefNumber"),
                 @Index(name = "idx_wallet_tx_created", columnList = "createdAt")
         },
         uniqueConstraints = {
                 @UniqueConstraint(
                         name = "uq_wallet_tx_source_reference",
                         columnNames = {"source", "externalReference"}
+                ),
+                @UniqueConstraint(
+                        name = "uq_wallet_tx_source_provider_id",
+                        columnNames = {"source", "providerTransactionId"}
                 )
         }
 )
 @Getter
-@NoArgsConstructor(access = AccessLevel.PROTECTED)
+@Setter
+@NoArgsConstructor(access = AccessLevel.PUBLIC)
 @ToString(exclude = "wallet")
 public class WalletTransaction {
 
@@ -36,8 +43,8 @@ public class WalletTransaction {
     /**
      * Wallet affected by this transaction.
      */
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "wallet_id", nullable = false, updatable = false)
+    @ManyToOne(fetch = FetchType.LAZY, optional = true)
+    @JoinColumn(name = "wallet_id")
     private Wallet wallet;
 
     /**
@@ -72,6 +79,20 @@ public class WalletTransaction {
     private String externalReference;
 
     /**
+     * Provider transaction id (e.g. TransID from M-Pesa / Daniel's API).
+     * Stored separately for clarity; often same as externalReference/idempotency key.
+     */
+    @Column(nullable = false, length = 100, updatable = false)
+    private String providerTransactionId;
+
+    /**
+     * Incoming BillRefNumber (student id or similar) as provided by the payment system.
+     * Populated even when the wallet is unresolved for reconciliation.
+     */
+    @Column(length = 100, updatable = false)
+    private String billRefNumber;
+
+    /**
      * Transaction lifecycle.
      */
     @Enumerated(EnumType.STRING)
@@ -98,8 +119,12 @@ public class WalletTransaction {
 
     @PrePersist
     void onCreate() {
-        this.createdAt = LocalDateTime.now();
-        this.status = TransactionStatus.PENDING;
+        if (this.createdAt == null) {
+            this.createdAt = LocalDateTime.now();
+        }
+        if (this.status == null) {
+            this.status = TransactionStatus.PENDING;
+        }
     }
 
     /* =========================
@@ -119,5 +144,12 @@ public class WalletTransaction {
             throw new IllegalStateException("Only PENDING transactions can fail");
         }
         this.status = TransactionStatus.FAILED;
+    }
+
+    public void markPendingConfirmation() {
+        if (this.status != TransactionStatus.PENDING && this.status != TransactionStatus.PENDING_CONFIRMATION) {
+            throw new IllegalStateException("Only pending transactions can be marked for manual confirmation");
+        }
+        this.status = TransactionStatus.PENDING_CONFIRMATION;
     }
 }

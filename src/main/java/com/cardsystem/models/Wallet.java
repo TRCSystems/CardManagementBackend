@@ -2,11 +2,13 @@ package com.cardsystem.models;
 
 import com.cardsystem.models.constants.WalletStatus;
 import jakarta.persistence.*;
-import lombok.*;
+import lombok.AccessLevel;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.ToString;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-@Data                // ← generates getters, setters, toString, equals, hashCode
 @Entity
 @Table(
         name = "wallets",
@@ -84,6 +86,14 @@ public class Wallet {
         this.status = WalletStatus.ACTIVE;
     }
 
+    public void setStudent(Student student) {
+        this.student = student;
+    }
+
+    public void setStatus(WalletStatus status) {
+        this.status = status;
+    }
+
     /* =========================
        INTERNAL USE ONLY
        ========================= */
@@ -94,5 +104,25 @@ public class Wallet {
      */
     void applyLedgerDelta(BigDecimal delta) {
         this.cachedBalance = this.cachedBalance.add(delta);
+    }
+
+    /**
+     * Add funds (no upper limit).
+     */
+    public void applyCredit(BigDecimal amount) {
+        if (amount == null) return;
+        this.cachedBalance = this.cachedBalance.add(amount);
+    }
+
+    /**
+     * Subtract funds; disallow negative balances.
+     */
+    public void applyDebit(BigDecimal amount) {
+        if (amount == null) return;
+        BigDecimal next = this.cachedBalance.subtract(amount);
+        if (next.compareTo(BigDecimal.ZERO) < 0) {
+            throw new IllegalStateException("Insufficient balance");
+        }
+        this.cachedBalance = next;
     }
 }

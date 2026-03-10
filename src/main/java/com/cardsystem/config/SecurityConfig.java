@@ -63,6 +63,7 @@ public class SecurityConfig {
             .csrf(csrf -> csrf.disable())
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/auth/**").permitAll()
+                .requestMatchers("/api/v1/wallets/c2b/**").permitAll()
                 .anyRequest().authenticated()
             )
             .sessionManagement(session -> session
