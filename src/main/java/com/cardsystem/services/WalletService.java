@@ -90,11 +90,9 @@ public class WalletService {
             txn.setDetails("Phone: " + phone);
             transactionRepository.save(txn);
 
-            // Update cached balance if using
-            if (wallet.getCachedBalance() != null) {
-                wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
-                walletRepository.save(wallet);
-            }
+            // Update cached balance using domain method
+            wallet.applyCredit(amount);
+            walletRepository.save(wallet);
         }, () -> {
             // Student not found; leave wallet null and mark pending confirmation for manual reconciliation
             walletTxn.markPendingConfirmation();
@@ -247,8 +245,16 @@ public class WalletService {
 
         transactionRepository.save(txn);
 
-        // Update cached
-        wallet.setCachedBalance(wallet.getCachedBalance().add(amount));
+        // Update cached with non-negative guard
+        try {
+            if (amount.compareTo(BigDecimal.ZERO) >= 0) {
+                wallet.applyCredit(amount);
+            } else {
+                wallet.applyDebit(amount.abs());
+            }
+        } catch (IllegalStateException ex) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, ex.getMessage());
+        }
         walletRepository.save(wallet);
     }
 
