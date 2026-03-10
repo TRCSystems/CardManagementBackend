@@ -15,6 +15,8 @@ import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 
+import java.util.List;
+
 @RestController
 @RequestMapping("/api/v1/cards")
 @RequiredArgsConstructor
@@ -143,6 +145,23 @@ public class CardController {
                 .studentId(request.getStudentId())
                 .message("Card successfully assigned to student ID " + request.getStudentId())
                 .build());
+    }
+
+}
+    // ───────────────────────────────────────────────-
+    // 6. Get full card details for ALL cards (card + student + wallet)
+    // ───────────────────────────────────────────────-
+    @GetMapping("/full-details")
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN', 'FINANCE_ADMIN', 'READ_ONLY')")
+    public ResponseEntity<List<CardFullDetailsResponse>> getAllCardsFullDetails(
+            @RequestParam(required = false) String schoolId) {
+        List<CardFullDetailsResponse> details;
+        if (schoolId != null && !schoolId.isBlank()) {
+            details = cardService.getFullCardDetailsBySchool(schoolId);
+        } else {
+            details = cardService.getAllFullCardDetails();
+        }
+        return ResponseEntity.ok(details);
     }
 
 }

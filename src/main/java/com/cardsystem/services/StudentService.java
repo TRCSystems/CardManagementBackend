@@ -40,13 +40,21 @@ public class StudentService {
     private final SchoolRepository schoolRepository;
     private final CardAssignmentRepository assignmentRepository;
     private final WalletService walletService;
+    private final AuditService auditService;
 
     @Transactional
     public Student createStudent(String schoolId, StudentCreateRequest request) {
         School school = schoolRepository.findById(schoolId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "School not found"));
+                .orElseThrow(() -> {
+                    auditService.logFailure(AuditService.ACTION_STUDENT_CREATED, AuditService.CATEGORY_STUDENT, 
+                        "School not found: " + schoolId, "School not found");
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "School not found");
+                });
 
         if (studentRepository.existsBySchoolAndStudentNumber(school, request.getStudentNumber())) {
+            auditService.logFailure(AuditService.ACTION_STUDENT_CREATED, AuditService.CATEGORY_STUDENT, 
+                "Student number " + request.getStudentNumber() + " already exists in school " + schoolId, 
+                "Duplicate student number");
             throw new ResponseStatusException(HttpStatus.CONFLICT,
                     "Student number " + request.getStudentNumber() + " already exists in this school");
         }
@@ -62,7 +70,14 @@ public class StudentService {
 
         student.setWallet(wallet);
 
-        return studentRepository.save(student);
+        Student savedStudent = studentRepository.save(student);
+        
+        auditService.logAction(AuditService.ACTION_STUDENT_CREATED, AuditService.CATEGORY_STUDENT, 
+            AuditService.ENTITY_STUDENT, savedStudent.getId(),
+            "Student created: " + savedStudent.getStudentNumber() + " (" + savedStudent.getName() + ") " +
+            "in school: " + school.getCode());
+        
+        return savedStudent;
     }
 
     @Transactional(readOnly = true)
@@ -124,22 +139,35 @@ public class StudentService {
     @Transactional
     public Student updateStudent(Long id, StudentUpdateRequest request) {
         Student student = getStudentById(id);
+        StringBuilder changes = new StringBuilder();
 
         // Only update provided fields (partial update)
         if (request.getName() != null) {
+            changes.append("name: ").append(student.getName()).append(" -> ").append(request.getName()).append("; ");
             student.setName(request.getName());
         }
         if (request.getClassGrade() != null) {
+            changes.append("classGrade: ").append(student.getClassGrade()).append(" -> ").append(request.getClassGrade()).append("; ");
             student.setClassGrade(request.getClassGrade());
         }
 
-        return studentRepository.save(student);
+        Student savedStudent = studentRepository.save(student);
+        
+        auditService.logAction(AuditService.ACTION_STUDENT_UPDATED, AuditService.CATEGORY_STUDENT, 
+            AuditService.ENTITY_STUDENT, savedStudent.getId(),
+            "Student updated: " + savedStudent.getStudentNumber() + " | Changes: " + changes.toString());
+        
+        return savedStudent;
     }
 
     @Transactional
     public BulkUploadResponse bulkCreateFromCsv(MultipartFile file, String schoolId) {
         School school = schoolRepository.findById(schoolId)
-                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "School not found"));
+                .orElseThrow(() -> {
+                    auditService.logFailure(AuditService.ACTION_STUDENT_BULK_UPLOAD, AuditService.CATEGORY_STUDENT, 
+                        "School not found: " + schoolId, "School not found");
+                    return new ResponseStatusException(HttpStatus.NOT_FOUND, "School not found");
+                });
 
         List<BulkUploadResponse.FailedRowDetail> failures = new ArrayList<>();
         int successCount = 0;
@@ -231,6 +259,10 @@ public class StudentService {
         } catch (IOException e) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Failed to read Excel file: " + e.getMessage());
         }
+
+        auditService.logAction(AuditService.ACTION_STUDENT_BULK_UPLOAD, AuditService.CATEGORY_STUDENT, 
+            null, null,
+            "Bulk upload: " + successCount + " students created, " + failures.size() + " failed for school: " + school.getCode());
 
         return BulkUploadResponse.builder()
                 .totalRows(rowNum)
