@@ -87,6 +87,21 @@ public class CardController {
                 .build());
     }
 
+    // 3b. Unblock card
+    @PostMapping("/{cardId}/unblock")
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN', 'FINANCE_ADMIN')")
+    public ResponseEntity<CardActionResponse> unblockCard(@PathVariable Long cardId) {
+
+        Card updated = cardService.unblockCard(cardId);
+
+        return ResponseEntity.ok(CardActionResponse.builder()
+                .cardId(updated.getId())
+                .uid(updated.getUid())
+                .status(updated.getStatus())
+                .message("Card unblocked successfully")
+                .build());
+    }
+
     // ────────────────────────────────────────────────
     // 4. Retire card (mark as unusable – usually before re-issue)
     // ────────────────────────────────────────────────
@@ -147,7 +162,7 @@ public class CardController {
                 .build());
     }
 
-}
+
     // ───────────────────────────────────────────────-
     // 6. Get full card details for ALL cards (card + student + wallet)
     // ───────────────────────────────────────────────-

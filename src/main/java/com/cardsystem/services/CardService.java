@@ -128,6 +128,8 @@ public class CardService {
             throw new ResponseStatusException(HttpStatus.CONFLICT,"Cannot block retired card");
         }
 
+        card.setStatus(CardStatus.BLOCKED);
+
         Card savedCard = cardRepository.save(card);
         
         auditService.logAction(AuditService.ACTION_CARD_BLOCKED, AuditService.CATEGORY_CARD, 
@@ -135,6 +137,37 @@ public class CardService {
             "Card " + card.getUid() + " blocked",
             "{\"status\":\"" + card.getStatus() + "\"}",
             "{\"status\":\"BLOCKED\"}");
+
+        return savedCard;
+    }
+
+    @Transactional
+    public Card unblockCard(Long cardId) {
+        Card card = getCardForUpdate(cardId);
+
+        if (card.getStatus() == CardStatus.RETIRED) {
+            auditService.logFailure(AuditService.ACTION_CARD_UNBLOCKED, AuditService.CATEGORY_CARD,
+                "Cannot unblock retired card " + cardId, "Cannot unblock retired card");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Cannot unblock retired card");
+        }
+
+        if (card.getStatus() != CardStatus.BLOCKED) {
+            auditService.logFailure(AuditService.ACTION_CARD_UNBLOCKED, AuditService.CATEGORY_CARD,
+                "Card " + cardId + " is not blocked (status: " + card.getStatus() + ")", "Card not blocked");
+            throw new ResponseStatusException(HttpStatus.CONFLICT, "Card is not blocked");
+        }
+
+        // Restore to assigned if it currently has an active assignment; otherwise unassigned
+        boolean hasActiveAssignment = assignmentRepository.findByCardAndUnassignedAtIsNull(card).isPresent();
+        card.setStatus(hasActiveAssignment ? CardStatus.ASSIGNED : CardStatus.UNASSIGNED);
+
+        Card savedCard = cardRepository.save(card);
+
+        auditService.logAction(AuditService.ACTION_CARD_UNBLOCKED, AuditService.CATEGORY_CARD,
+            AuditService.ENTITY_CARD, savedCard.getId(),
+            "Card " + card.getUid() + " unblocked",
+            "{\"status\":\"BLOCKED\"}",
+            "{\"status\":\"" + card.getStatus() + "\"}");
 
         return savedCard;
     }

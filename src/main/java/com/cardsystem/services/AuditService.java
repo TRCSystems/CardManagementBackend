@@ -31,6 +31,7 @@ public class AuditService {
     public static final String ACTION_CARD_ISSUED = "CARD_ISSUED";
     public static final String ACTION_CARD_BOUND = "CARD_BOUND";
     public static final String ACTION_CARD_BLOCKED = "CARD_BLOCKED";
+    public static final String ACTION_CARD_UNBLOCKED = "CARD_UNBLOCKED";
     public static final String ACTION_CARD_RETIRED = "CARD_RETIRED";
     public static final String ACTION_CARD_LISTED = "CARD_LISTED";
     
