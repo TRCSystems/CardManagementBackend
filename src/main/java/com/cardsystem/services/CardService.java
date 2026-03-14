@@ -10,6 +10,7 @@ import com.cardsystem.repository.CardAssignmentRepository;
 import com.cardsystem.repository.CardRepository;
 import com.cardsystem.repository.SchoolRepository;
 import com.cardsystem.repository.StudentRepository;
+import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.transaction.annotation.Transactional;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -34,6 +35,7 @@ public class CardService {
     private final StudentRepository studentRepository;
     private final SchoolRepository schoolRepository;
     private final AuditService auditService;
+    private final PasswordEncoder passwordEncoder;
 
     @Transactional
     public Card issueCard(String uidRaw, String schoolId) throws ChangeSetPersister.NotFoundException {
@@ -111,6 +113,29 @@ public class CardService {
             "Card " + card.getUid() + " bound to student: " + student.getStudentNumber() + " (" + student.getName() + ")",
             null, null);
         
+        return savedCard;
+    }
+
+    @Transactional
+    public Card setPin(Long cardId, String rawPin) {
+        Card card = getCardForUpdate(cardId);
+        if (rawPin == null || !rawPin.matches("\\d{4}")) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "PIN must be exactly 4 digits");
+        }
+
+        String hash = passwordEncoder.encode(rawPin);
+        card.setPinHash(hash);
+        card.setPinSetAt(LocalDateTime.now());
+        card.setPinRetryCount(0);
+        card.setPinLockedUntil(null);
+
+        Card savedCard = cardRepository.save(card);
+
+        auditService.logAction(AuditService.ACTION_CARD_PIN_SET, AuditService.CATEGORY_CARD,
+                AuditService.ENTITY_CARD, savedCard.getId(),
+                "PIN set for card " + card.getUid(),
+                null, null);
+
         return savedCard;
     }
 

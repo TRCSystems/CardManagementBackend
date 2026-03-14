@@ -119,6 +119,23 @@ public class CardController {
                 .build());
     }
 
+    // Set or reset 4-digit PIN (admin action)
+    @PostMapping("/{cardId}/pin")
+    @PreAuthorize("hasAnyRole('SCHOOL_ADMIN', 'SUPER_ADMIN', 'FINANCE_ADMIN')")
+    public ResponseEntity<CardActionResponse> setPin(
+            @PathVariable Long cardId,
+            @RequestParam("pin") String pin) {
+
+        Card updated = cardService.setPin(cardId, pin);
+
+        return ResponseEntity.ok(CardActionResponse.builder()
+                .cardId(updated.getId())
+                .uid(updated.getUid())
+                .status(updated.getStatus())
+                .message("PIN set successfully")
+                .build());
+    }
+
     // ────────────────────────────────────────────────
     // Optional: Quick lookup by UID (very useful for testing & future POS/NFC)
     // ────────────────────────────────────────────────

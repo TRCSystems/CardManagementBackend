@@ -40,8 +40,25 @@ public class Card {
     @Column(name = "current_assignment_id")
     private Long currentAssignmentId;
 
+    // Securely stored PIN (bcrypt hash). Not returned in responses.
+    @Column(name = "pin_hash", length = 100)
+    private String pinHash;
+
+    @Column(name = "pin_set_at")
+    private LocalDateTime pinSetAt;
+
+    @Column(name = "pin_retry_count")
+    private int pinRetryCount;
+
+    @Column(name = "pin_locked_until")
+    private LocalDateTime pinLockedUntil;
+
     public boolean isActiveForSpending() {
         return status == CardStatus.ASSIGNED && currentAssignmentId != null;
+    }
+
+    public boolean isPinLocked() {
+        return pinLockedUntil != null && pinLockedUntil.isAfter(LocalDateTime.now());
     }
 }
 

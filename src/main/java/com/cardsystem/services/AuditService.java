@@ -33,6 +33,9 @@ public class AuditService {
     public static final String ACTION_CARD_BLOCKED = "CARD_BLOCKED";
     public static final String ACTION_CARD_UNBLOCKED = "CARD_UNBLOCKED";
     public static final String ACTION_CARD_RETIRED = "CARD_RETIRED";
+    public static final String ACTION_CARD_PIN_SET = "CARD_PIN_SET";
+    public static final String ACTION_CARD_PIN_FAILED = "CARD_PIN_FAILED";
+    public static final String ACTION_CARD_PIN_LOCKED = "CARD_PIN_LOCKED";
     public static final String ACTION_CARD_LISTED = "CARD_LISTED";
     
     // Wallet Actions
